@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ${APP_NAME}-scheduler
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-server
+    component: scheduler
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid          # prevent overlapping runs
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: scheduler
+              image: ${IMAGE_SERVER}  # replaced by CI
+              imagePullPolicy: IfNotPresent
+              command: ["php", "artisan", "schedule:run", "--no-ansi"]
+              volumeMounts:
+                - name: env-file
+                  mountPath: /var/www/html/.env
+                  subPath: .env
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+          volumes:
+            - name: env-file
+              secret:
+                secretName: ${APP_NAME}-server-env
+          restartPolicy: OnFailure
+          imagePullSecrets:
+            - name: ghcr-pull-secret

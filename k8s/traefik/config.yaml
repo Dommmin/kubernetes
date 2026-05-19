@@ -1,0 +1,20 @@
+# k3s: configure Traefik to redirect HTTP → HTTPS globally.
+#
+# Apply FIRST — before Traefik CRDs exist:
+#   kubectl apply -f k8s/traefik/config.yaml
+#
+# Apply AFTER Traefik is Running (CRDs installed):
+#   kubectl apply -f k8s/traefik/middleware.yaml
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    service:
+      externalIPs:
+        - "46.225.188.145"
+    globalArguments:
+      - "--global.sendanonymoususage=false"

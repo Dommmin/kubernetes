@@ -1,0 +1,37 @@
+# Applied by CI/CD before rolling out new deployments.
+# Rendered by k8s/render.sh with IMAGE_SERVER and REVISION.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${APP_NAME}-migrate-${REVISION}
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-server
+    component: migrate
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 2
+  template:
+    spec:
+      containers:
+        - name: migrate
+          image: ${IMAGE_SERVER}
+          command: ["php", "artisan", "migrate", "--force", "--no-ansi"]
+          volumeMounts:
+            - name: env-file
+              mountPath: /var/www/html/.env
+              subPath: .env
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: env-file
+          secret:
+            secretName: ${APP_NAME}-server-env
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull-secret

@@ -1,0 +1,96 @@
+# Standalone PostgreSQL for GlitchTip.
+#
+# The GlitchTip Helm chart (8.x) no longer bundles a Postgres subchart — its
+# `postgresql.enabled: true` path expects the CloudNativePG operator (CRDs:
+# postgresql.cnpg.io/v1). To avoid a cluster-wide operator dependency, we run
+# a plain single-instance Postgres here and point the chart at it via
+# `glitchtip.database.existingSecret` (a secret holding DATABASE_URL).
+#
+# Lives in the `glitchtip` namespace (created by bootstrap.sh before this is
+# applied; `helm --create-namespace` is idempotent if it already exists).
+#
+# Password is read from the `glitchtip-secrets` Secret (see secret.yaml.example).
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: glitchtip-postgresql
+  namespace: glitchtip
+  labels:
+    app: glitchtip-postgresql
+spec:
+  selector:
+    app: glitchtip-postgresql
+  ports:
+    - port: 5432
+      targetPort: 5432
+  clusterIP: None # headless — stable DNS: glitchtip-postgresql.glitchtip.svc.cluster.local
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: glitchtip-postgresql
+  namespace: glitchtip
+  labels:
+    app: glitchtip-postgresql
+spec:
+  serviceName: glitchtip-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: glitchtip-postgresql
+  template:
+    metadata:
+      labels:
+        app: glitchtip-postgresql
+    spec:
+      containers:
+        - name: postgresql
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              value: glitchtip
+            - name: POSTGRES_DB
+              value: glitchtip
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: glitchtip-secrets
+                  key: POSTGRES_PASSWORD
+            # keep data in a subdir so the PVC root (lost+found etc.) is not PGDATA
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+              name: postgresql
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "glitchtip", "-d", "glitchtip"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "glitchtip", "-d", "glitchtip"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 10Gi

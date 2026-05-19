@@ -1,0 +1,525 @@
+name: CI / Deploy
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+    inputs:
+      skip_deploy:
+        description: "Build images only (skip K8s deploy)"
+        type: boolean
+        default: false
+      deploy_only:
+        description: "Skip lint/test/build — deploy existing :latest images"
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  APP_NAME: ${{ vars.APP_NAME || 'app' }}
+  KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE || vars.APP_NAME || 'app' }}
+  # Opt in to Node.js 24 runner for Docker actions (removes deprecation warnings)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  # ============================================================================
+  changes:
+  # ============================================================================
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.detect.outputs.server }}
+      client: ${{ steps.detect.outputs.client }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed paths
+        id: detect
+        run: |
+          # deploy_only → skip all builds regardless of what changed
+          if [ "${{ inputs.deploy_only }}" = "true" ]; then
+            echo "server=false" >> "$GITHUB_OUTPUT"
+            echo "client=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # On first push (no parent commit) treat everything as changed
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "server/ client/")
+
+          if echo "$CHANGED" | grep -qE "^server/"; then
+            echo "server=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "server=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if echo "$CHANGED" | grep -qE "^client/"; then
+            echo "client=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "client=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ============================================================================
+  lint-server:
+  # ============================================================================
+    name: Lint — server (Pint + Rector + Larastan + ESLint + Prettier + Types)
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.server == 'true'
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install PHP dependencies
+        run: composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Copy environment file
+        run: cp .env.example .env
+
+      - name: Generate application key
+        run: php artisan key:generate
+
+      - name: Run database migrations
+        run: |
+          touch database/database.sqlite
+          php artisan migrate --force
+
+      - name: Generate Wayfinder types
+        run: php artisan wayfinder:generate
+
+      - name: PHP code style (Pint)
+        run: vendor/bin/pint --test
+
+      - name: PHP static analysis (Rector dry-run)
+        run: vendor/bin/rector process --dry-run
+
+      - name: PHP static analysis (Larastan)
+        run: php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress
+
+      - name: Frontend types
+        run: npm run types
+
+      - name: Frontend lint (ESLint)
+        run: npx eslint . --max-warnings=0
+
+      - name: Frontend format check (Prettier)
+        run: npm run format:check
+
+  # ============================================================================
+  security:
+  # ============================================================================
+    name: Security Audit
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true'
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install PHP dependencies
+        working-directory: server
+        run: composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
+
+      - name: Install Node dependencies (server)
+        working-directory: server
+        run: npm ci
+
+      - name: Install Node dependencies (client)
+        working-directory: client
+        run: npm ci
+
+      - name: PHP security audit
+        working-directory: server
+        run: composer audit
+
+      - name: Node security audit (server)
+        working-directory: server
+        run: npm audit --audit-level=moderate
+
+      - name: Node security audit (client)
+        working-directory: client
+        run: npm audit --audit-level=moderate
+
+  # ============================================================================
+  lint-client:
+  # ============================================================================
+    name: Lint — client (Next.js ESLint + Prettier + Types)
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.client == 'true'
+    defaults:
+      run:
+        working-directory: client
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Types (TS)
+        run: npm run types
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Format check (Prettier)
+        run: npm run format:check
+
+  # ============================================================================
+  test:
+  # ============================================================================
+    name: Tests — Pest (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.server == 'true'
+    strategy:
+      matrix:
+        php: ['8.4', '8.5']
+
+    services:
+      gotenberg:
+        image: gotenberg/gotenberg:8
+        ports:
+          - 3000:3000
+
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Copy environment file
+        run: cp .env.example .env
+
+      - name: Generate application key
+        run: php artisan key:generate
+
+      - name: Generate Wayfinder types
+        run: php artisan wayfinder:generate
+
+      - name: Build frontend assets
+        run: npm run build
+
+      - name: Run tests
+        env:
+          GOTENBERG_URL: http://localhost:3000
+        run: ./vendor/bin/pest --parallel
+
+  # ============================================================================
+  build-server:
+  # ============================================================================
+    name: Build server image
+    runs-on: ubuntu-latest
+    needs: [changes, lint-server, lint-client, test, security]
+    if: |
+      always() && !failure() && !cancelled() &&
+      github.event_name != 'pull_request' &&
+      needs.changes.outputs.server == 'true'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.images.outputs.server }}:${{ steps.sha.outputs.short }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Lowercase image name
+        id: images
+        run: echo "server=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${APP_NAME}-server" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: server/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.images.outputs.server }}:${{ steps.sha.outputs.short }}
+            ${{ steps.images.outputs.server }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============================================================================
+  build-client:
+  # ============================================================================
+    name: Build client image
+    runs-on: ubuntu-latest
+    needs: [changes, lint-server, lint-client, test, security]
+    if: |
+      always() && !failure() && !cancelled() &&
+      github.event_name != 'pull_request' &&
+      needs.changes.outputs.client == 'true'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.images.outputs.client }}:${{ steps.sha.outputs.short }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Lowercase image name
+        id: images
+        run: echo "client=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${APP_NAME}-client" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: client/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.images.outputs.client }}:${{ steps.sha.outputs.short }}
+            ${{ steps.images.outputs.client }}:latest
+          build-args: ${{ vars.ENV_CLIENT_PROD }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============================================================================
+  deploy:
+  # ============================================================================
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: [changes, build-server, build-client]
+    if: |
+      always() && !failure() && !cancelled() &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      !inputs.skip_deploy
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false  # never cancel a running deploy
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve image tags
+        id: images
+        run: |
+          SHA="${{ steps.sha.outputs.short }}"
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+
+          # Use SHA-tagged image if just built; fall back to :latest if build was skipped
+          if [ "${{ needs.build-server.result }}" = "success" ]; then
+            echo "server=ghcr.io/${OWNER}/${APP_NAME}-server:${SHA}" >> "$GITHUB_OUTPUT"
+          else
+            echo "server=ghcr.io/${OWNER}/${APP_NAME}-server:latest" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ "${{ needs.build-client.result }}" = "success" ]; then
+            echo "client=ghcr.io/${OWNER}/${APP_NAME}-client:${SHA}" >> "$GITHUB_OUTPUT"
+          else
+            echo "client=ghcr.io/${OWNER}/${APP_NAME}-client:latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: Configure kubeconfig
+        run: |
+          if [ -z "${{ secrets.KUBECONFIG_PROD }}" ]; then
+            echo "::error::KUBECONFIG_PROD secret is not set."
+            echo "::error::Go to GitHub → Settings → Secrets → Actions and add KUBECONFIG_PROD."
+            echo "::error::Value: paste the raw content of ~/.kube/config-hetzner (no base64)"
+            exit 1
+          fi
+          mkdir -p ~/.kube
+          printf '%s' "${{ secrets.KUBECONFIG_PROD }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      # --------------------------------------------------------------------------
+      # 0. Sync production .env → Kubernetes Secret (from GitHub Variables)
+      #    PROD_ENV: Settings → Variables → Actions → PROD_ENV
+      #    Full .env content — readable & editable in GitHub UI.
+      # --------------------------------------------------------------------------
+      - name: Sync server secret
+        run: |
+          if [ -z "$PROD_ENV" ]; then
+            echo "::warning::PROD_ENV variable is not set — skipping secret sync."
+          else
+            APP_NAME="${APP_NAME}" KUBE_NAMESPACE="${KUBE_NAMESPACE}" ./k8s/render.sh k8s/namespace.yaml | kubectl apply -f -
+            printf '%s' "$PROD_ENV" > /tmp/prod.env
+            kubectl create secret generic "${APP_NAME}-server-env" \
+              --from-file=.env=/tmp/prod.env \
+              --namespace="${KUBE_NAMESPACE}" \
+              --dry-run=client -o yaml | kubectl apply -f -
+            rm /tmp/prod.env
+            echo "✓ ${APP_NAME}-server-env secret updated"
+          fi
+        env:
+          PROD_ENV: ${{ vars.PROD_ENV }}
+
+      # --------------------------------------------------------------------------
+      # 0b. Apply networking and config manifests (always, safe to re-apply)
+      # --------------------------------------------------------------------------
+      - name: Apply infrastructure manifests
+        run: |
+          APP_NAME="${APP_NAME}" KUBE_NAMESPACE="${KUBE_NAMESPACE}" ./k8s/render.sh \
+            k8s/namespace.yaml \
+            k8s/ingress.yaml \
+            k8s/traefik/middleware.yaml \
+            k8s/server/service.yaml \
+            k8s/server/hpa.yaml \
+            k8s/client/service.yaml \
+            k8s/client/hpa.yaml | kubectl apply -f -
+          kubectl apply -f k8s/traefik/config.yaml
+
+      # --------------------------------------------------------------------------
+      # 1. Run database migrations (Job with new image, wait for completion)
+      # --------------------------------------------------------------------------
+      - name: Run migrations
+        run: |
+          SHA="${{ steps.sha.outputs.short }}"
+          IMAGE="${{ steps.images.outputs.server }}"
+
+          APP_NAME="${APP_NAME}" \
+            KUBE_NAMESPACE="${KUBE_NAMESPACE}" \
+            IMAGE_SERVER="${IMAGE}" \
+            REVISION="${SHA}" \
+            ./k8s/render.sh k8s/server/job-migrate.yaml | kubectl apply --validate=false -f -
+
+          kubectl -n "${KUBE_NAMESPACE}" wait job/"${APP_NAME}-migrate-${SHA}" \
+            --for=condition=complete \
+            --timeout=120s
+
+      # --------------------------------------------------------------------------
+      # 2. Roll out server (web) — apply full manifest with correct image tag
+      # --------------------------------------------------------------------------
+      - name: Deploy server
+        run: |
+          APP_NAME="${APP_NAME}" \
+            KUBE_NAMESPACE="${KUBE_NAMESPACE}" \
+            IMAGE_SERVER="${{ steps.images.outputs.server }}" \
+            ./k8s/render.sh k8s/server/deployment.yaml | kubectl apply -f -
+          kubectl -n "${KUBE_NAMESPACE}" rollout status deployment/"${APP_NAME}-server" \
+            --timeout=5m
+
+      # --------------------------------------------------------------------------
+      # 3. Roll out queue workers
+      # --------------------------------------------------------------------------
+      - name: Deploy queue workers
+        run: |
+          APP_NAME="${APP_NAME}" \
+            KUBE_NAMESPACE="${KUBE_NAMESPACE}" \
+            IMAGE_SERVER="${{ steps.images.outputs.server }}" \
+            ./k8s/render.sh k8s/server/deployment-queue.yaml | kubectl apply -f -
+          kubectl -n "${KUBE_NAMESPACE}" rollout status deployment/"${APP_NAME}-queue" \
+            --timeout=5m
+
+      # --------------------------------------------------------------------------
+      # 4. Update scheduler CronJob
+      # --------------------------------------------------------------------------
+      - name: Deploy scheduler
+        run: |
+          APP_NAME="${APP_NAME}" \
+            KUBE_NAMESPACE="${KUBE_NAMESPACE}" \
+            IMAGE_SERVER="${{ steps.images.outputs.server }}" \
+            ./k8s/render.sh k8s/server/cronjob-scheduler.yaml | kubectl apply -f -
+
+      # --------------------------------------------------------------------------
+      # 5. Roll out Next.js frontend
+      # --------------------------------------------------------------------------
+      - name: Deploy client
+        run: |
+          APP_NAME="${APP_NAME}" \
+            KUBE_NAMESPACE="${KUBE_NAMESPACE}" \
+            IMAGE_CLIENT="${{ steps.images.outputs.client }}" \
+            ./k8s/render.sh k8s/client/deployment.yaml | kubectl apply -f -
+          kubectl -n "${KUBE_NAMESPACE}" rollout status deployment/"${APP_NAME}-client" \
+            --timeout=5m

@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${APP_NAME}-client
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${APP_NAME}-client
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: ${APP_NAME}-client
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: frontend
+          image: ${IMAGE_CLIENT}  # replaced by CI
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: PORT
+              value: "3000"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: NODE_ENV
+              value: "production"
+            # Internal API URL for Next.js server-side fetches (bypasses the
+            # public internet). Not sensitive — a cluster-internal DNS name —
+            # so it's a plain env var, not a Secret.
+            - name: API_URL
+              value: "http://${APP_NAME}-server.${KUBE_NAMESPACE}.svc.cluster.local/api/v1"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+      imagePullSecrets:
+        - name: ghcr-pull-secret

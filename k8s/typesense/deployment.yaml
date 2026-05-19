@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${APP_NAME}-typesense
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-typesense
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${APP_NAME}-typesense
+  template:
+    metadata:
+      labels:
+        app: ${APP_NAME}-typesense
+    spec:
+      containers:
+        - name: typesense
+          image: typesense/typesense:27.1
+          command:
+            - /opt/typesense-server
+            - --data-dir=/data
+            - --api-key=$(TYPESENSE_API_KEY)
+            - --listen-port=8108
+          env:
+            - name: TYPESENSE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ${APP_NAME}-typesense
+                  key: api-key
+          ports:
+            - containerPort: 8108
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8108
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8108
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ${APP_NAME}-typesense-data

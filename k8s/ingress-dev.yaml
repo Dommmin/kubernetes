@@ -1,0 +1,49 @@
+# Development / testing ingress — HTTP only, no TLS, no cert-manager.
+#
+# Use when you don't have a real domain yet.
+# Replace 1.2.3.4 with your actual server IP.
+#
+# Apply:
+#   kubectl apply -f k8s/ingress-dev.yaml
+#
+# Remove when switching to production ingress:
+#   kubectl delete -f k8s/ingress-dev.yaml
+#   kubectl apply -f k8s/ingress.yaml
+#
+# ─── How sslip.io works ─────────────────────────────────────────────────────────
+# app.1.2.3.4.sslip.io  →  resolves to  1.2.3.4  (automatic, no registration)
+# api.1.2.3.4.sslip.io  →  resolves to  1.2.3.4
+# Just replace the IP in the hostnames below.
+# ──────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ${APP_NAME}-ingress
+  namespace: ${KUBE_NAMESPACE}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: "web"          # HTTP only
+    traefik.ingress.kubernetes.io/router.middlewares: "${KUBE_NAMESPACE}-body-size@kubernetescrd"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: "app.46.225.188.145.sslip.io"    # ← replace 1.2.3.4 with your server IP
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ${APP_NAME}-client
+                port:
+                  number: 3000
+    - host: "api.46.225.188.145.sslip.io"    # ← replace 1.2.3.4 with your server IP
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ${APP_NAME}-server
+                port:
+                  number: 80

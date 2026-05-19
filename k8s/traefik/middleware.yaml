@@ -1,0 +1,26 @@
+# Traefik Middleware: increase request body limit to 100 MB (file uploads).
+#
+# Apply AFTER Traefik is Running — CRDs must exist first.
+# namespace must match your application namespace.
+#
+# The Ingress annotation references this as:
+#   traefik.ingress.kubernetes.io/router.middlewares: "<NAMESPACE>-body-size@kubernetescrd"
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: body-size
+  namespace: ${KUBE_NAMESPACE}
+spec:
+  buffering:
+    maxRequestBodyBytes: 104857600  # 100 MB
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+  namespace: ${KUBE_NAMESPACE}
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true

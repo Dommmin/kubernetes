@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ${APP_NAME}-mysql-backup
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-mysql
+    component: backup
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: mysql-backup
+              image: mysql:8.0
+              env:
+                - name: MYSQL_ROOT_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${APP_NAME}-mysql
+                      key: root-password
+                - name: BACKUP_DIR
+                  value: /backups
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+                  mysqldump -h ${APP_NAME}-mysql -u root -p"$MYSQL_ROOT_PASSWORD" --single-transaction --routines --triggers --all-databases > "$BACKUP_DIR/mysql-$ts.sql"
+                  gzip "$BACKUP_DIR/mysql-$ts.sql"
+                  find "$BACKUP_DIR" -name 'mysql-*.sql.gz' -mtime +14 -delete
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          volumes:
+            - name: backups
+              hostPath:
+                path: /opt/${APP_NAME}-backups
+                type: DirectoryOrCreate

@@ -1,0 +1,69 @@
+# GlitchTip Helm values — for chart 8.2.0 (app v6.1.4).
+#
+#   cp k8s/glitchtip/values.example.yaml k8s/glitchtip/values.yaml
+#   # edit values.yaml — set the domain + SMTP
+#
+# Secrets (SECRET_KEY, DATABASE_URL) do NOT go here — they live in the
+# `glitchtip-secrets` Secret (see secret.yaml.example). This file only holds
+# non-sensitive Helm config.
+#
+# Chart docs: helm show values glitchtip/glitchtip
+
+glitchtip:
+  # SECRET_KEY is read from the glitchtip-secrets Secret.
+  existingSecret: glitchtip-secrets
+  existingSecretKey: SECRET_KEY
+
+  # Public URL of this GlitchTip instance (include the scheme).
+  domain: https://glitchtip.yourdomain.com
+
+  # DATABASE_URL is read from the glitchtip-secrets Secret. The Postgres
+  # server itself is k8s/glitchtip/postgresql.yaml (a standalone StatefulSet).
+  database:
+    existingSecret: glitchtip-secrets
+    existingSecretKey: DATABASE_URL
+
+# Bundled Valkey (Redis-compatible). The chart auto-generates REDIS_URL and
+# wires it into the pods — nothing to configure here.
+valkey:
+  enabled: true
+
+# Do NOT use the chart's built-in Postgres — its `enabled: true` path expects
+# the CloudNativePG operator. We run our own (postgresql.yaml) instead.
+postgresql:
+  enabled: false
+
+web:
+  # Single replica is fine for a small VPS. Bump to 2+ for HA — but then also
+  # raise `web.budget.minAvailable` accordingly.
+  replicaCount: 1
+  # Background worker runs inside the web pod (no separate worker Deployment).
+  embedWorker: true
+
+  ingress:
+    enabled: true
+    className: traefik # k3s default ingress controller
+    hosts:
+      - host: glitchtip.yourdomain.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: glitchtip-tls
+        hosts:
+          - glitchtip.yourdomain.com
+
+  # GlitchTip reads SMTP config from EMAIL_URL (Django-style URL).
+  # NOTE: URL-encode special chars in the username/password — e.g. an `@`
+  # in a Gmail address becomes %40. Gmail needs an App Password (not your
+  # account password): https://myaccount.google.com/apppasswords
+  extraEnvVars:
+    - name: EMAIL_URL
+      value: "smtp://USER%40gmail.com:APP_PASSWORD@smtp.gmail.com:587"
+    - name: DEFAULT_FROM_EMAIL
+      value: "noreply@yourdomain.com"
+
+# Standalone worker Deployment disabled — web.embedWorker covers it at this
+# scale. Enable + scale this only under heavy event volume.
+worker:
+  enabled: false

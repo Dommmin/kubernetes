@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ${APP_NAME}-mysql
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-mysql
+spec:
+  serviceName: ${APP_NAME}-mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${APP_NAME}-mysql
+  template:
+    metadata:
+      labels:
+        app: ${APP_NAME}-mysql
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ${APP_NAME}-mysql
+                  key: root-password
+            - name: MYSQL_DATABASE
+              value: cms
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ${APP_NAME}-mysql
+                  key: username
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ${APP_NAME}-mysql
+                  key: password
+          ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          livenessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysql -h localhost -u root -p$MYSQL_ROOT_PASSWORD -e 'SELECT 1'"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 20Gi

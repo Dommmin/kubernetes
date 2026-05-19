@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${APP_NAME}-server
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-server
+    component: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${APP_NAME}-server
+      component: web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0   # zero-downtime rolling deploy
+  template:
+    metadata:
+      labels:
+        app: ${APP_NAME}-server
+        component: web
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: app
+          image: ${IMAGE_SERVER}  # replaced by CI
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+              name: http
+          volumeMounts:
+            - name: env-file
+              mountPath: /var/www/html/.env
+              subPath: .env
+            - name: storage
+              mountPath: /var/www/html/storage/app
+              subPath: app
+            - name: storage
+              mountPath: /var/www/html/storage/logs
+              subPath: logs
+          env:
+            - name: USER_NAME
+              value: "www-data"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          # Liveness: nginx level — restart if process is dead
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness: Laravel health endpoint — gate traffic until app is ready
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]  # drain in-flight requests
+      volumes:
+        - name: env-file
+          secret:
+            secretName: ${APP_NAME}-server-env
+        - name: storage
+          persistentVolumeClaim:
+            claimName: ${APP_NAME}-server-storage
+      imagePullSecrets:
+        - name: ghcr-pull-secret

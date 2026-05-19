@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${APP_NAME}-gotenberg
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-gotenberg
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${APP_NAME}-gotenberg
+  template:
+    metadata:
+      labels:
+        app: ${APP_NAME}-gotenberg
+    spec:
+      containers:
+        - name: gotenberg
+          image: gotenberg/gotenberg:8
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3

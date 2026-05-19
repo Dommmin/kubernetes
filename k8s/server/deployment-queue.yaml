@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${APP_NAME}-queue
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-server
+    component: queue
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ${APP_NAME}-server
+      component: queue
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: ${APP_NAME}-server
+        component: queue
+    spec:
+      terminationGracePeriodSeconds: 120  # allow current job to finish
+      containers:
+        - name: queue
+          image: ${IMAGE_SERVER}  # replaced by CI
+          imagePullPolicy: Always
+          # mkdir ensures storage/framework subdirs exist before worker starts
+          # (required for queued Excel exports, file sessions, view cache)
+          # --max-time restarts worker hourly to prevent memory leaks
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p storage/framework/cache/laravel-excel \
+                       storage/framework/cache/data \
+                       storage/framework/sessions \
+                       storage/framework/views \
+                && chown -R www-data:www-data storage 2>/dev/null || true
+              exec php artisan queue:work --tries=3 --sleep=3 --max-time=3600 --no-ansi
+          volumeMounts:
+            - name: env-file
+              mountPath: /var/www/html/.env
+              subPath: .env
+            - name: storage
+              mountPath: /var/www/html/storage/app
+              subPath: app
+            - name: storage
+              mountPath: /var/www/html/storage/logs
+              subPath: logs
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "queue:work"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: env-file
+          secret:
+            secretName: ${APP_NAME}-server-env
+        # Shared with ${APP_NAME}-server so queued exports (Excel) are visible to web pod.
+        # PVC is ReadWriteOnce — works on single-node k3s (all pods land on same node).
+        # For multi-node clusters: switch exports to S3/MinIO disk.
+        - name: storage
+          persistentVolumeClaim:
+            claimName: ${APP_NAME}-server-storage
+      imagePullSecrets:
+        - name: ghcr-pull-secret

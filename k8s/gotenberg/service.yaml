@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${APP_NAME}-gotenberg
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-gotenberg
+spec:
+  selector:
+    app: ${APP_NAME}-gotenberg
+  ports:
+    - port: 3000
+      targetPort: 3000
+  type: ClusterIP

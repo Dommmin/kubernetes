@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${APP_NAME}-server-storage
+  namespace: ${KUBE_NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteOnce   # single pod — fine for replicas: 1
+                      # switch to MinIO/S3 when scaling to replicas: 2+
+  storageClassName: local-path   # built into k3s, stores on VPS disk
+  resources:
+    requests:
+      storage: 20Gi

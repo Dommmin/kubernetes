@@ -1,0 +1,44 @@
+# Operational tools for the production VPS.
+# Run alongside k3s — these containers are managed by Docker, not Kubernetes.
+#
+# Usage:
+#   docker compose -f docker-compose.ops.yml up -d
+#
+# Access (restrict ports 8443 and 3001 to your IP via UFW or Hetzner Firewall):
+#   Rancher:      https://<SERVER_IP>:8443
+#   Uptime Kuma:  http://<SERVER_IP>:3001
+
+services:
+  rancher:
+    image: rancher/rancher:latest
+    container_name: rancher
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - rancher_data:/var/lib/rancher
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:latest
+    container_name: uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - uptime_kuma_data:/app/data
+
+volumes:
+  rancher_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/rancher
+  uptime_kuma_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/uptime-kuma

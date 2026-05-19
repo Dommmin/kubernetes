@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${APP_NAME}-client
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-client
+spec:
+  selector:
+    app: ${APP_NAME}-client
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+  type: ClusterIP

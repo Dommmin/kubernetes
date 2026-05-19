@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${APP_NAME}-redis
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-redis
+spec:
+  selector:
+    app: ${APP_NAME}-redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+  type: ClusterIP

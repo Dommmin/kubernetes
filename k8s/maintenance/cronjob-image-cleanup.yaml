@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: image-cleanup
+  namespace: kube-system
+spec:
+  schedule: "0 2 * * 0"    # every Sunday at 2:00 AM
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          hostPID: true
+          containers:
+            - name: cleanup
+              image: alpine:3.20
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "Pruning unused containerd images..."
+                  /usr/local/bin/crictl rmi --prune || true
+                  echo "Done."
+              securityContext:
+                privileged: true
+              volumeMounts:
+                - name: crictl-bin
+                  mountPath: /usr/local/bin/crictl
+                - name: containerd-sock
+                  mountPath: /run/containerd
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 64Mi
+          volumes:
+            - name: crictl-bin
+              hostPath:
+                path: /usr/local/bin/crictl
+                type: File
+            - name: containerd-sock
+              hostPath:
+                path: /run/containerd
+                type: Directory
+          restartPolicy: OnFailure
+          nodeSelector:
+            kubernetes.io/os: linux
