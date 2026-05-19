@@ -12,6 +12,7 @@ class CreateNewUser implements CreatesNewUsers
 {
     use PasswordValidationRules;
     use ProfileValidationRules;
+
     /**
      * Validate and create a newly registered user.
      *
