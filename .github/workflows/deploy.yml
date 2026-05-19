@@ -20,55 +20,14 @@ env:
   REGISTRY: ghcr.io
   APP_NAME: ${{ vars.APP_NAME || 'app' }}
   KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE || vars.APP_NAME || 'app' }}
-  # Opt in to Node.js 24 runner for Docker actions (removes deprecation warnings)
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  # ============================================================================
-  changes:
-  # ============================================================================
-    name: Detect changes
-    runs-on: ubuntu-latest
-    outputs:
-      server: ${{ steps.detect.outputs.server }}
-      client: ${{ steps.detect.outputs.client }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 2
-
-      - name: Detect changed paths
-        id: detect
-        run: |
-          # deploy_only → skip all builds regardless of what changed
-          if [ "${{ inputs.deploy_only }}" = "true" ]; then
-            echo "server=false" >> "$GITHUB_OUTPUT"
-            echo "client=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # On first push (no parent commit) treat everything as changed
-          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "server/ client/")
-
-          if echo "$CHANGED" | grep -qE "^server/"; then
-            echo "server=true"  >> "$GITHUB_OUTPUT"
-          else
-            echo "server=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          if echo "$CHANGED" | grep -qE "^client/"; then
-            echo "client=true"  >> "$GITHUB_OUTPUT"
-          else
-            echo "client=false" >> "$GITHUB_OUTPUT"
-          fi
-
   # ============================================================================
   lint-server:
   # ============================================================================
     name: Lint — server (Pint + Rector + Larastan + ESLint + Prettier + Types)
     runs-on: ubuntu-latest
-    needs: [changes]
-    if: needs.changes.outputs.server == 'true'
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.deploy_only }}
     defaults:
       run:
         working-directory: server
@@ -132,8 +91,7 @@ jobs:
   # ============================================================================
     name: Security Audit
     runs-on: ubuntu-latest
-    needs: [changes]
-    if: needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true'
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.deploy_only }}
 
     steps:
       - uses: actions/checkout@v6
@@ -180,8 +138,7 @@ jobs:
   # ============================================================================
     name: Lint — client (Next.js ESLint + Prettier + Types)
     runs-on: ubuntu-latest
-    needs: [changes]
-    if: needs.changes.outputs.client == 'true'
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.deploy_only }}
     defaults:
       run:
         working-directory: client
@@ -213,8 +170,7 @@ jobs:
   # ============================================================================
     name: Tests — Pest (PHP ${{ matrix.php }})
     runs-on: ubuntu-latest
-    needs: [changes]
-    if: needs.changes.outputs.server == 'true'
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.deploy_only }}
     strategy:
       matrix:
         php: ['8.4', '8.5']
@@ -273,11 +229,11 @@ jobs:
   # ============================================================================
     name: Build server image
     runs-on: ubuntu-latest
-    needs: [changes, lint-server, lint-client, test, security]
+    needs: [lint-server, lint-client, test, security]
     if: |
       always() && !failure() && !cancelled() &&
       github.event_name != 'pull_request' &&
-      needs.changes.outputs.server == 'true'
+      (github.event_name != 'workflow_dispatch' || !inputs.deploy_only)
     permissions:
       contents: read
       packages: write
@@ -322,11 +278,11 @@ jobs:
   # ============================================================================
     name: Build client image
     runs-on: ubuntu-latest
-    needs: [changes, lint-server, lint-client, test, security]
+    needs: [lint-server, lint-client, test, security]
     if: |
       always() && !failure() && !cancelled() &&
       github.event_name != 'pull_request' &&
-      needs.changes.outputs.client == 'true'
+      (github.event_name != 'workflow_dispatch' || !inputs.deploy_only)
     permissions:
       contents: read
       packages: write
@@ -372,11 +328,11 @@ jobs:
   # ============================================================================
     name: Deploy to Kubernetes
     runs-on: ubuntu-latest
-    needs: [changes, build-server, build-client]
+    needs: [build-server, build-client]
     if: |
       always() && !failure() && !cancelled() &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      !inputs.skip_deploy
+      (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     environment: production
     concurrency:
       group: production-deploy
