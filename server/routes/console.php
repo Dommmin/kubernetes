@@ -3,6 +3,8 @@
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 
+use function Laravel\Prompts\info;
+
 Artisan::command('inspire', function (): void {
-    $this->comment(Inspiring::quote());
+    info(Inspiring::quote());
 })->purpose('Display an inspiring quote');
