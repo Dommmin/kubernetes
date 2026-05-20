@@ -271,8 +271,8 @@ jobs:
           tags: |
             ${{ steps.images.outputs.server }}:${{ steps.sha.outputs.short }}
             ${{ steps.images.outputs.server }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
 
   # ============================================================================
   build-client:
@@ -321,8 +321,8 @@ jobs:
             ${{ steps.images.outputs.client }}:${{ steps.sha.outputs.short }}
             ${{ steps.images.outputs.client }}:latest
           build-args: ${{ vars.ENV_CLIENT_PROD }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=client
+          cache-to: type=gha,mode=max,scope=client
 
   # ============================================================================
   deploy:
