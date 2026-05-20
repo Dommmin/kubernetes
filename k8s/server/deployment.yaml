@@ -63,7 +63,7 @@ spec:
           # Readiness: Laravel health endpoint — gate traffic until app is ready
           readinessProbe:
             httpGet:
-              path: /health
+              path: /up
               port: 80
             initialDelaySeconds: 10
             periodSeconds: 5
