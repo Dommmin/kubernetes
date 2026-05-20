@@ -18,8 +18,9 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  APP_NAME: ${{ vars.APP_NAME || 'app' }}
-  KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE || vars.APP_NAME || 'app' }}
+  APP_NAME: ${{ vars.APP_NAME || github.event.repository.name }}
+  IMAGE_NAME: ${{ vars.IMAGE_NAME || github.event.repository.name }}
+  KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE || vars.APP_NAME || github.event.repository.name }}
 
 jobs:
   # ============================================================================
@@ -249,7 +250,7 @@ jobs:
 
       - name: Lowercase image name
         id: images
-        run: echo "server=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${APP_NAME}-server" >> "$GITHUB_OUTPUT"
+        run: echo "server=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}-server" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -298,7 +299,7 @@ jobs:
 
       - name: Lowercase image name
         id: images
-        run: echo "client=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${APP_NAME}-client" >> "$GITHUB_OUTPUT"
+        run: echo "client=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}-client" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -353,15 +354,15 @@ jobs:
 
           # Use SHA-tagged image if just built; fall back to :latest if build was skipped
           if [ "${{ needs.build-server.result }}" = "success" ]; then
-            echo "server=ghcr.io/${OWNER}/${APP_NAME}-server:${SHA}" >> "$GITHUB_OUTPUT"
+            echo "server=ghcr.io/${OWNER}/${IMAGE_NAME}-server:${SHA}" >> "$GITHUB_OUTPUT"
           else
-            echo "server=ghcr.io/${OWNER}/${APP_NAME}-server:latest" >> "$GITHUB_OUTPUT"
+            echo "server=ghcr.io/${OWNER}/${IMAGE_NAME}-server:latest" >> "$GITHUB_OUTPUT"
           fi
 
           if [ "${{ needs.build-client.result }}" = "success" ]; then
-            echo "client=ghcr.io/${OWNER}/${APP_NAME}-client:${SHA}" >> "$GITHUB_OUTPUT"
+            echo "client=ghcr.io/${OWNER}/${IMAGE_NAME}-client:${SHA}" >> "$GITHUB_OUTPUT"
           else
-            echo "client=ghcr.io/${OWNER}/${APP_NAME}-client:latest" >> "$GITHUB_OUTPUT"
+            echo "client=ghcr.io/${OWNER}/${IMAGE_NAME}-client:latest" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up kubectl
