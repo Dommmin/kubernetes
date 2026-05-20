@@ -444,6 +444,9 @@ jobs:
             KUBE_NAMESPACE="${KUBE_NAMESPACE}" \
             IMAGE_SERVER="${{ steps.images.outputs.server }}" \
             ./k8s/render.sh k8s/server/deployment.yaml | kubectl apply -f -
+          # .env is mounted through subPath, so Secret updates are only visible
+          # after the pod is recreated.
+          kubectl -n "${KUBE_NAMESPACE}" rollout restart deployment/"${APP_NAME}-server"
           kubectl -n "${KUBE_NAMESPACE}" rollout status deployment/"${APP_NAME}-server" \
             --timeout=5m
 
@@ -456,6 +459,9 @@ jobs:
             KUBE_NAMESPACE="${KUBE_NAMESPACE}" \
             IMAGE_SERVER="${{ steps.images.outputs.server }}" \
             ./k8s/render.sh k8s/server/deployment-queue.yaml | kubectl apply -f -
+          # .env is mounted through subPath, so Secret updates are only visible
+          # after the pod is recreated.
+          kubectl -n "${KUBE_NAMESPACE}" rollout restart deployment/"${APP_NAME}-queue"
           kubectl -n "${KUBE_NAMESPACE}" rollout status deployment/"${APP_NAME}-queue" \
             --timeout=5m
 
