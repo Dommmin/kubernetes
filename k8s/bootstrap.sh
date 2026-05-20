@@ -100,6 +100,17 @@ collect_inputs() {
   prompt "Typesense API key (random, at least 16 chars):"
   read -rs TYPESENSE_API_KEY; echo
 
+  prompt "Install MinIO (optional S3-compatible object storage)? [y/N]:"
+  read -r INSTALL_MINIO; INSTALL_MINIO="${INSTALL_MINIO:-N}"
+  if [[ "$INSTALL_MINIO" == [Yy] ]]; then
+    prompt "MinIO root username [minioadmin]:"
+    read -r MINIO_ROOT_USER; MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
+    prompt "MinIO root password (strong, at least 16 chars):"
+    read -rs MINIO_ROOT_PASSWORD; echo
+    prompt "MinIO bucket for Laravel files [${APP_NAME}]:"
+    read -r MINIO_BUCKET; MINIO_BUCKET="${MINIO_BUCKET:-$APP_NAME}"
+  fi
+
   echo
   prompt "CI/CD system? [1] GitHub Actions  [2] GitLab CI  [Enter to skip]:"
   read -r CI_CHOICE
@@ -378,18 +389,54 @@ step_services() {
   ok "Typesense is ready"
 }
 
-# ─── Step 8: Storage PVC ─────────────────────────────────────────────────────
+# ─── Step 8: Optional MinIO ──────────────────────────────────────────────────
+step_minio() {
+  if [[ "$INSTALL_MINIO" != [Yy] ]]; then
+    return
+  fi
+
+  section "Step 8 — MinIO (optional S3-compatible object storage)"
+
+  kubectl create secret generic "${APP_NAME}-minio" \
+    --namespace="${KUBE_NAMESPACE}" \
+    --from-literal=root-user="${MINIO_ROOT_USER}" \
+    --from-literal=root-password="${MINIO_ROOT_PASSWORD}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  ok "${APP_NAME}-minio secret created"
+
+  kapply k8s/minio/pvc.yaml
+  kapply k8s/minio/deployment.yaml
+  kapply k8s/minio/service.yaml
+  ok "MinIO PVC + Deployment + Service applied"
+
+  info "Waiting for MinIO..."
+  kubectl -n "${KUBE_NAMESPACE}" rollout status deployment/"${APP_NAME}-minio" --timeout=3m
+  ok "MinIO is ready"
+
+  info "Creating MinIO bucket ${MINIO_BUCKET} if it does not exist..."
+  kubectl -n "${KUBE_NAMESPACE}" delete job/"${APP_NAME}-minio-create-bucket" --ignore-not-found
+  kapply k8s/minio/job-create-bucket.yaml
+  kubectl -n "${KUBE_NAMESPACE}" wait job/"${APP_NAME}-minio-create-bucket" \
+    --for=condition=complete \
+    --timeout=120s
+  ok "MinIO bucket ${MINIO_BUCKET} is available"
+
+  info "MinIO does not replace the default server storage PVC automatically."
+  info "To use it from Laravel later, configure FILESYSTEM_DISK=s3 and AWS_* env vars in PROD_ENV."
+}
+
+# ─── Step 9: Storage PVC ─────────────────────────────────────────────────────
 step_storage() {
-  section "Step 8 — Server Storage PVC"
+  section "Step 9 — Server Storage PVC"
 
   kapply k8s/server/pvc-storage.yaml
   ok "${APP_NAME}-server-storage PVC created"
   info "PVC will bind automatically when the server pod is scheduled (WaitForFirstConsumer)."
 }
 
-# ─── Step 9: Application ─────────────────────────────────────────────────────
+# ─── Step 10: Application ────────────────────────────────────────────────────
 step_application() {
-  section "Step 9 — Application (server + client)"
+  section "Step 10 — Application (server + client)"
 
   kapply k8s/server/service.yaml
   kapply k8s/server/deployment.yaml
@@ -406,9 +453,9 @@ step_application() {
   info "Note: pods may be in ImagePullBackOff until CI/CD pushes the first image."
 }
 
-# ─── Step 10: Ingress ────────────────────────────────────────────────────────
+# ─── Step 11: Ingress ────────────────────────────────────────────────────────
 step_ingress() {
-  section "Step 10 — Ingress"
+  section "Step 11 — Ingress"
 
   if [[ "$APPLY_DEV_INGRESS" == [Yy] ]]; then
     kapply k8s/ingress-dev.yaml
@@ -424,21 +471,21 @@ step_ingress() {
   fi
 }
 
-# ─── Step 11: Maintenance CronJobs ───────────────────────────────────────────
+# ─── Step 12: Maintenance CronJobs ───────────────────────────────────────────
 step_maintenance() {
-  section "Step 11 — Maintenance (image cleanup)"
+  section "Step 12 — Maintenance (image cleanup)"
 
   kapply k8s/maintenance/cronjob-image-cleanup.yaml
   ok "Image cleanup CronJob applied (runs every Sunday 2:00 AM)"
 }
 
-# ─── Step 12: GlitchTip (optional) ───────────────────────────────────────────
+# ─── Step 13: GlitchTip (optional) ───────────────────────────────────────────
 step_glitchtip() {
   if [[ "$INSTALL_GLITCHTIP" != [Yy] ]]; then
     return
   fi
 
-  section "Step 12 — GlitchTip (error tracking)"
+  section "Step 13 — GlitchTip (error tracking)"
 
   # GlitchTip is OPTIONAL — nothing here may abort the bootstrap. Every early
   # return is just a `warn` + `return`, and the helm install itself runs in a
@@ -494,13 +541,13 @@ step_glitchtip() {
   fi
 }
 
-# ─── Step 13: Ops tooling (Rancher + Uptime Kuma via docker-compose) ─────────
+# ─── Step 14: Ops tooling (Rancher + Uptime Kuma via docker-compose) ─────────
 step_ops_tooling() {
   if [[ "$INSTALL_OPS" != [Yy] ]]; then
     return
   fi
 
-  section "Step 13 — Ops tooling (Rancher + Uptime Kuma)"
+  section "Step 14 — Ops tooling (Rancher + Uptime Kuma)"
 
   if [ ! -f "docker-compose.ops.yml" ]; then
     warn "docker-compose.ops.yml not found in repo root — skipping."
@@ -586,6 +633,17 @@ print_summary() {
   echo "     mkdir -p /opt/${APP_NAME}-backups  # on the server"
   echo "     APP_NAME=${APP_NAME} KUBE_NAMESPACE=${KUBE_NAMESPACE} ./k8s/render.sh k8s/mysql/cronjob-backup.yaml | kubectl apply -f -"
   echo ""
+  if [[ "$INSTALL_MINIO" == [Yy] ]]; then
+    echo "  5. (Optional) Use MinIO from Laravel by adding these to PROD_ENV:"
+    echo "     FILESYSTEM_DISK=s3"
+    echo "     AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}"
+    echo "     AWS_SECRET_ACCESS_KEY=<MinIO root password>"
+    echo "     AWS_DEFAULT_REGION=us-east-1"
+    echo "     AWS_BUCKET=${MINIO_BUCKET}"
+    echo "     AWS_ENDPOINT=http://${APP_NAME}-minio.${KUBE_NAMESPACE}.svc.cluster.local:9000"
+    echo "     AWS_USE_PATH_STYLE_ENDPOINT=true"
+    echo ""
+  fi
   echo -e "${BOLD}Useful commands:${NC}"
   echo "  kubectl -n ${KUBE_NAMESPACE} get pods          # check pod status"
   echo "  kubectl -n ${KUBE_NAMESPACE} get ingress        # check ingress + IP"
@@ -620,6 +678,7 @@ main() {
   step_pull_secret
   step_databases
   step_services
+  step_minio
   step_storage
   step_application
   step_ingress

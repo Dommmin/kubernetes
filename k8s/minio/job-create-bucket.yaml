@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${APP_NAME}-minio-create-bucket
+  namespace: ${KUBE_NAMESPACE}
+  labels:
+    app: ${APP_NAME}-minio
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app: ${APP_NAME}-minio
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-bucket
+          image: minio/mc:latest
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ${APP_NAME}-minio
+                  key: root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ${APP_NAME}-minio
+                  key: root-password
+            - name: MINIO_BUCKET
+              value: ${MINIO_BUCKET}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              mc alias set app-minio "http://${APP_NAME}-minio:9000" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+              mc mb --ignore-existing "app-minio/$MINIO_BUCKET"

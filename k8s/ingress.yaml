@@ -31,12 +31,12 @@ spec:
   ingressClassName: traefik
   tls:
     - hosts:
-        - laravel-test.site
-        - www.laravel-test.site
-        - admin.laravel-test.site
+        - laravel-test.shop
+        - www.laravel-test.shop
+        - admin.laravel-test.shop
       secretName: ${APP_NAME}-tls
   rules:
-    - host: laravel-test.site
+    - host: laravel-test.shop
       http:
         paths:
           - path: /
@@ -46,7 +46,7 @@ spec:
                 name: ${APP_NAME}-client
                 port:
                   number: 3000
-    - host: www.laravel-test.site
+    - host: www.laravel-test.shop
       http:
         paths:
           - path: /
@@ -56,7 +56,7 @@ spec:
                 name: ${APP_NAME}-client
                 port:
                   number: 3000
-    - host: admin.laravel-test.site
+    - host: admin.laravel-test.shop
       http:
         paths:
           - path: /
